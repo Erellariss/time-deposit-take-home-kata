@@ -1,14 +1,23 @@
-package org.ikigaidigital;
+package org.ikigaidigital.calculator;
 
+import org.ikigaidigital.calculator.plan.BasicInterestCalculator;
+import org.ikigaidigital.calculator.plan.PlanInterestCalculator;
+import org.ikigaidigital.calculator.plan.PremiumInterestCalculator;
+import org.ikigaidigital.calculator.plan.StudentInterestCalculator;
+import org.ikigaidigital.domain.TimeDeposit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.junit.jupiter.api.Named.named;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
@@ -18,10 +27,14 @@ class TimeDepositCalculatorTest {
     private static final String STUDENT = "student";
     private static final String PREMIUM = "premium";
 
+    private final DepositBalanceCalculator calculator = new TimeDepositCalculator(List.of(
+            new BasicInterestCalculator(), new StudentInterestCalculator(), new PremiumInterestCalculator()
+    ));
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("balanceCases")
     void updatesBalance(TimeDeposit deposit, double expectedBalance) {
-        new TimeDepositCalculator().updateBalance(List.of(deposit));
+        calculator.updateBalance(List.of(deposit));
 
         assertThat(deposit.getBalance()).isEqualTo(expectedBalance);
     }
@@ -34,7 +47,7 @@ class TimeDepositCalculatorTest {
                 new TimeDeposit(3, PREMIUM, 1200.00, 46)
         );
 
-        new TimeDepositCalculator().updateBalance(deposits);
+        calculator.updateBalance(deposits);
 
         assertThat(deposits)
                 .extracting(TimeDeposit::getId, TimeDeposit::getPlanType, TimeDeposit::getDays, TimeDeposit::getBalance)
@@ -49,7 +62,6 @@ class TimeDepositCalculatorTest {
     void usesUpdatedBalanceOnTheNextCall() {
         var deposit = new TimeDeposit(1, STUDENT, 40000.00, 31);
         var deposits = List.of(deposit);
-        var calculator = new TimeDepositCalculator();
 
         calculator.updateBalance(deposits);
         assertThat(deposit.getBalance()).isEqualTo(40100.00);
@@ -60,7 +72,39 @@ class TimeDepositCalculatorTest {
 
     @Test
     void acceptsAnEmptyList() {
-        new TimeDepositCalculator().updateBalance(List.of());
+        calculator.updateBalance(List.of());
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"unknown", "Basic", " basic "})
+    void rejectsAnUnregisteredPlanBeforeUpdatingBalances(String planType) {
+        var eligible = new TimeDeposit(1, BASIC, 1200.00, 31);
+        var invalid = new TimeDeposit(2, planType, 1200.00, 30);
+
+        assertThatThrownBy(() -> calculator.updateBalance(List.of(eligible, invalid)))
+                .isInstanceOf(InvalidPlanTypeException.class);
+        assertThat(eligible.getBalance()).isEqualTo(1200.00);
+    }
+
+    @Test
+    void usesARegisteredCalculatorForItsPlanName() {
+        var planCalculator = new PlanInterestCalculator() {
+            @Override
+            public String getPlanName() {
+                return "custom";
+            }
+
+            @Override
+            public double calculateInterest(double balance, int days) {
+                return balance / 100 + days;
+            }
+        };
+        var deposit = new TimeDeposit(1, planCalculator.getPlanName(), 1000.00, 62);
+
+        new TimeDepositCalculator(Set.of(planCalculator)).updateBalance(List.of(deposit));
+
+        assertThat(deposit.getBalance()).isEqualTo(1072.00);
     }
 
     private static Stream<Arguments> balanceCases() {
